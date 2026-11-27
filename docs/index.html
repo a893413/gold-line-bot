@@ -58,16 +58,6 @@
     </div>
   </div>
 
-  <div class="card" id="posCard" hidden>
-    <h2>現在算高還是低？（和近一年比）</h2>
-    <div class="bar"><div class="dot" id="posDot"></div></div>
-    <div class="ends">
-      <div>近一年最低<b id="posLo">—</b><span id="posLoD"></span></div>
-      <div>近一年最高<b id="posHi">—</b><span id="posHiD"></span></div>
-    </div>
-    <div class="pos" id="posTxt"></div>
-  </div>
-
   <div class="row" id="ranges">
     <button data-r="today">今天</button>
     <button data-r="7">1 週</button>
@@ -82,6 +72,11 @@
     <p class="tip">用手指點圖上任何一天，上面會顯示那天的價格</p>
   </div>
 
+  <div class="row">
+    <button id="uQ" class="on">看每一錢</button>
+    <button id="uG">看每一公克</button>
+  </div>
+
   <div class="card" id="calcCard">
     <h2>我的金子現在值多少？</h2>
     <div class="calc">
@@ -93,9 +88,14 @@
     <div class="hint" id="worthHint">輸入數量就會自動計算，下次打開會記得。</div>
   </div>
 
-  <div class="row">
-    <button id="uQ" class="on">看每一錢</button>
-    <button id="uG">看每一公克</button>
+  <div class="card" id="posCard" hidden>
+    <h2>現在算高還是低？（和近一年比）</h2>
+    <div class="bar"><div class="dot" id="posDot"></div></div>
+    <div class="ends">
+      <div>近一年最低<b id="posLo">—</b><span id="posLoD"></span></div>
+      <div>近一年最高<b id="posHi">—</b><span id="posHiD"></span></div>
+    </div>
+    <div class="pos" id="posTxt"></div>
   </div>
 
   <p class="note">價格來源：XAUS 國際黃金現貨價 × 美元匯率換算（中間價）。一錢 = 3.75 公克。早期的歷史資料是用目前匯率換算，和當時實際台幣價格會有一點差距。<br>
