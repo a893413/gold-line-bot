@@ -22,8 +22,8 @@
   .row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
   button { font:inherit; font-size:18px; padding:10px 14px; border-radius:12px; border:1.5px solid var(--line); background:var(--card); color:var(--ink); min-height:48px; }
   button.on { border-color:var(--gold); background:#fbf3df; color:#7a5a08; font-weight:700; }
-  #ranges { flex-wrap:nowrap; gap:6px; }
-  #ranges button { flex:1; padding:10px 2px; font-size:17px; white-space:nowrap; }
+  #ranges { display:grid; grid-template-columns:repeat(4, 1fr); gap:6px; }
+  #ranges button { padding:10px 2px; font-size:17px; white-space:nowrap; }
   .chart { position:relative; height:320px; }
   .tip { font-size:16px; color:var(--sub); text-align:center; margin:6px 0 0; }
   .note { font-size:14px; color:var(--muted); line-height:1.6; }
@@ -50,7 +50,9 @@
     <button data-r="7">1 週</button>
     <button data-r="30" class="on">1 個月</button>
     <button data-r="90">3 個月</button>
+    <button data-r="182">6 個月</button>
     <button data-r="365">1 年</button>
+    <button data-r="730">2 年</button>
   </div>
   <div class="card">
     <div class="chart"><canvas id="c" role="img" aria-label="黃金參考價走勢圖"></canvas></div>
