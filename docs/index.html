@@ -253,8 +253,8 @@
   }
 
   // ---------- 即時金價（每 60 秒更新，網頁在背景時暫停） ----------
-  function taipeiNow() {
-    var s = new Date().toLocaleString("sv-SE", { timeZone: "Asia/Taipei", hour12: false });
+  function taipeiTime(d) {   // 用資料來源伺服器的時間，不依賴手機時鐘準不準
+    var s = (d || new Date()).toLocaleString("sv-SE", { timeZone: "Asia/Taipei", hour12: false });
     return { date: s.slice(0, 10), hm: s.slice(11, 16) };
   }
   function getJSON(u) {
@@ -266,7 +266,9 @@
       if (x.currency === "TWD" && (x.unit === "gram" || x.unit === "g") && Math.abs(x.price - g) / g < 0.01) g = +x.price;
       if (!(g > 0)) throw new Error("bad price");
       fx = f;
-      return { g: Math.round(g * 100) / 100, status: (j.data_state || {}).status || "" };
+      var at = new Date(j.updated_at || (j.data_state || {}).as_of || Date.now());
+      if (isNaN(at)) at = new Date();
+      return { g: Math.round(g * 100) / 100, status: (j.data_state || {}).status || "", at: at };
     });
   }
   function liveIntraday(date) {
@@ -282,7 +284,7 @@
   function refresh() {
     if (!daily.length) return;
     liveSpot().then(function (sp) {
-      var t = taipeiNow(), wd = new Date(t.date + "T00:00:00+08:00").getDay();
+      var t = taipeiTime(sp.at), wd = new Date(t.date + "T00:00:00+08:00").getDay();
       if (wd >= 1 && wd <= 5) {   // 平日才更新今天這一筆，週末不新增假的資料點
         var last = daily[daily.length - 1];
         if (last[0] === t.date) daily[daily.length - 1] = [t.date, sp.g];
