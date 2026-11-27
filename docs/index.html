@@ -37,11 +37,10 @@
 
   <div class="card" id="pick">
     <div class="label" id="pickWhen">　</div>
-    <div class="label">拿去賣，<span class="unitTxt">每一錢</span>大約</div>
+    <div class="label">國際金價換算，<span class="unitTxt">每一錢</span></div>
     <div class="big" id="pickBuy">—</div>
     <div class="chg" id="pickChg">　</div>
     <div class="grid">
-      <div class="mini">買金價（<span class="unitTxt">每一錢</span>）<b id="pickSell">—</b></div>
       <div class="mini" id="otherUnit">每一公克<b id="pickOther">—</b></div>
     </div>
   </div>
@@ -63,8 +62,8 @@
     <button id="uG">看每一公克</button>
   </div>
 
-  <p class="note">價格來源：臺灣銀行黃金存摺公開牌價（「拿去賣」＝銀行買入價，「買金價」＝銀行賣出價）。一錢 = 3.75 公克。<br>
-  拿金飾、金條去銀樓賣，每家店價格不同，實際金額以店家報價為準。</p>
+  <p class="note">價格來源：XAUS 國際黃金現貨價 × 美元匯率換算（中間價）。一錢 = 3.75 公克。早期的歷史資料是用目前匯率換算，和當時實際台幣價格會有一點差距。<br>
+  拿金飾、金條去銀樓或銀行賣，收購價通常會再低一些，每家店也不同，實際金額以店家報價為準。</p>
 </main>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
@@ -89,16 +88,16 @@
       var prevClose = null;
       for (var i = daily.length - 1; i >= 0; i--) if (daily[i][0] < d) { prevClose = daily[i]; break; }
       return rows.map(function (r, i) {
-        return { label: r[0], when: dayLabel(d) + " " + r[0], buy: r[1], sell: r[2],
+        return { label: r[0], when: dayLabel(d) + " " + r[0], buy: r[1],
                  prev: i > 0 ? rows[i - 1][1] : (prevClose ? prevClose[1] : null),
-                 prevTxt: i > 0 ? "比上一次掛牌" : "比前一天收盤" };
+                 prevTxt: i > 0 ? "比 5 分鐘前" : "比前一天收盤" };
       });
     }
     var n = parseInt(range, 10), sl = daily.slice(-n), off = daily.length - sl.length;
     return sl.map(function (r, i) {
       var p = daily[off + i - 1];
       return { label: r[0].slice(5).replace("-", "/"), when: dayLabel(r[0]),
-               buy: r[1], sell: r[2], prev: p ? p[1] : null, prevTxt: "比前一天" };
+               buy: r[1], prev: p ? p[1] : null, prevTxt: "比前一天" };
     });
   }
 
@@ -106,9 +105,8 @@
     var p = pts[i]; if (!p) return;
     $("pickWhen").textContent = p.when;
     $("pickBuy").textContent = fmt(v(p.buy));
-    $("pickSell").textContent = fmt(v(p.sell));
     $("pickOther").textContent = unit === "q" ? fmt(Math.round(p.buy)) : fmt(Math.round(p.buy * Q));
-    $("otherUnit").firstChild.textContent = unit === "q" ? "拿去賣每一公克" : "拿去賣每一錢";
+    $("otherUnit").firstChild.textContent = unit === "q" ? "每一公克" : "每一錢";
     var c = $("pickChg");
     if (p.prev) {
       var diff = v(p.buy) - v(p.prev), pct = (diff / v(p.prev) * 100).toFixed(1);
@@ -127,7 +125,7 @@
     document.querySelectorAll(".unitTxt").forEach(function (e) { e.textContent = unit === "q" ? "每一錢" : "每一公克"; });
     if (!pts.length) {
       if (chart) { chart.destroy(); chart = null; }
-      $("pickWhen").textContent = "今天台銀還沒有掛牌（或休假日）";
+      $("pickWhen").textContent = "今天還沒有資料";
       return;
     }
     var data = pts.map(function (p) { return v(p.buy); });
