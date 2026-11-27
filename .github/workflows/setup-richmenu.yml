@@ -1,0 +1,19 @@
+name: 設定聊天室按鈕
+
+on:
+  workflow_dispatch:   # 只在手動按「Run workflow」時執行
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests==2.32.3
+      - name: 建立聊天室下方的「查看金價走勢」按鈕
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+        run: python bot/setup_richmenu.py
