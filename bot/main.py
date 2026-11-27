@@ -135,6 +135,7 @@ def render_chart(rows, path):
     from matplotlib.ticker import FuncFormatter
 
     labels = [r[0][5:].replace("-", "/") for r in rows]
+    labels[0] = rows[0][0].replace("-", "/")  # 第一個日期標年份
     vals = [qian(r[1]) for r in rows]
     x = list(range(len(vals)))
 
@@ -201,7 +202,7 @@ def build_message(info, cfg, test=False):
     now_q = qian(info["twd_g"])
     when = info["when"]
     title = ("【測試】" if test else "") + "黃金參考價"
-    subtitle = f"{when.month}/{when.day}（{WEEKDAY[when.weekday()]}）" \
+    subtitle = f"{when.year}/{when.month}/{when.day}（{WEEKDAY[when.weekday()]}）" \
                f"{when.strftime('%H:%M')} 國際金價即時換算"
 
     body = []
