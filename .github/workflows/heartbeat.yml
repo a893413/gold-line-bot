@@ -1,0 +1,16 @@
+name: 排程測試（不傳 LINE）
+
+# 暫時用：每 5 分鐘跑一次，只確認 GitHub 的自動排程有沒有在動，不傳任何訊息。
+# 確認完就會刪掉這個檔案。
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: 記錄時間
+        run: echo "排程有在動，台灣時間 $(TZ=Asia/Taipei date '+%Y-%m-%d %H:%M:%S')"
