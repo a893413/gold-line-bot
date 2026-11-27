@@ -78,7 +78,7 @@
   function $(id) { return document.getElementById(id); }
   function dayLabel(d) {
     var dt = new Date(d + "T00:00:00+08:00");
-    return (dt.getMonth() + 1) + "/" + dt.getDate() + "（" + WK[dt.getDay()] + "）";
+    return dt.getFullYear() + "/" + (dt.getMonth() + 1) + "/" + dt.getDate() + "（" + WK[dt.getDay()] + "）";
   }
 
   function buildPoints() {
@@ -96,7 +96,9 @@
     var n = parseInt(range, 10), sl = daily.slice(-n), off = daily.length - sl.length;
     return sl.map(function (r, i) {
       var p = daily[off + i - 1];
-      return { label: r[0].slice(5).replace("-", "/"), when: dayLabel(r[0]),
+      var lbl = n >= 365 ? r[0].slice(0, 7).replace("-", "/")
+              : n >= 90 ? r[0].replace(/-/g, "/") : r[0].slice(5).replace("-", "/");
+      return { label: lbl, when: dayLabel(r[0]),
                buy: r[1], prev: p ? p[1] : null, prevTxt: "比前一天" };
     });
   }
@@ -143,7 +145,7 @@
         onClick: function (e, a) { if (a.length) show(a[0].index); },
         onHover: function (e, a) { if (a.length) show(a[0].index); },
         scales: {
-          x: { grid: { display: false }, ticks: { color: "#888", font: { size: 14 }, maxTicksLimit: 6, maxRotation: 0 } },
+          x: { grid: { display: false }, ticks: { color: "#888", font: { size: 13 }, maxTicksLimit: range === "90" ? 3 : range === "365" ? 4 : 6, maxRotation: 0 } },
           y: { grid: { color: "#eee" }, ticks: { color: "#888", font: { size: 14 },
                callback: function (x) { return x.toLocaleString("zh-TW"); } } }
         }
