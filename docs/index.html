@@ -76,6 +76,10 @@
   function v(g) { return unit === "q" ? Math.round(g * Q) : Math.round(g); }
   function fmt(n) { return n.toLocaleString("zh-TW") + " 元"; }
   function $(id) { return document.getElementById(id); }
+  function fullDate(d) {
+    var x = d.split("-");
+    return x[0] + "/" + parseInt(x[1], 10) + "/" + parseInt(x[2], 10);
+  }
   function dayLabel(d) {
     var dt = new Date(d + "T00:00:00+08:00");
     return dt.getFullYear() + "/" + (dt.getMonth() + 1) + "/" + dt.getDate() + "（" + WK[dt.getDay()] + "）";
@@ -93,12 +97,17 @@
                  prevTxt: i > 0 ? "比 5 分鐘前" : "比前一天收盤" };
       });
     }
-    var n = parseInt(range, 10), sl = daily.slice(-n), off = daily.length - sl.length;
+    var n = parseInt(range, 10);
+    // 照真實日曆天數取資料（週末沒有交易，不能用筆數算）
+    var last = new Date(daily[daily.length - 1][0] + "T00:00:00+08:00");
+    var cut = new Date(last.getTime() - n * 86400000);
+    var cutStr = cut.getFullYear() + "-" + String(cut.getMonth() + 1).padStart(2, "0") + "-" + String(cut.getDate()).padStart(2, "0");
+    var off = 0;
+    while (off < daily.length && daily[off][0] <= cutStr) off++;
+    var sl = daily.slice(off);
     return sl.map(function (r, i) {
       var p = daily[off + i - 1];
-      var lbl = n >= 365 ? r[0].slice(0, 7).replace("-", "/")
-              : n >= 90 ? r[0].replace(/-/g, "/") : r[0].slice(5).replace("-", "/");
-      return { label: lbl, when: dayLabel(r[0]),
+      return { label: fullDate(r[0]), when: dayLabel(r[0]),
                buy: r[1], prev: p ? p[1] : null, prevTxt: "比前一天" };
     });
   }
@@ -145,7 +154,7 @@
         onClick: function (e, a) { if (a.length) show(a[0].index); },
         onHover: function (e, a) { if (a.length) show(a[0].index); },
         scales: {
-          x: { grid: { display: false }, ticks: { color: "#888", font: { size: 13 }, maxTicksLimit: range === "90" ? 3 : range === "365" ? 4 : 6, maxRotation: 0 } },
+          x: { grid: { display: false }, ticks: { color: "#888", font: { size: 13 }, maxTicksLimit: range === "today" ? 6 : 3, maxRotation: 0 } },
           y: { grid: { color: "#eee" }, ticks: { color: "#888", font: { size: 14 },
                callback: function (x) { return x.toLocaleString("zh-TW"); } } }
         }
