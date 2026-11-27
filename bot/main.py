@@ -134,8 +134,8 @@ def render_chart(rows, path):
     import matplotlib.pyplot as plt
     from matplotlib.ticker import FuncFormatter
 
-    labels = [r[0][5:].replace("-", "/") for r in rows]
-    labels[0] = rows[0][0].replace("-", "/")  # 第一個日期標年份
+    # 日期一律標年份，格式和網頁一致（例如 2026/11/27）
+    labels = ["/".join(str(int(x)) for x in r[0].split("-")) for r in rows]
     vals = [qian(r[1]) for r in rows]
     x = list(range(len(vals)))
 
@@ -158,7 +158,7 @@ def render_chart(rows, path):
                         xytext=(0, dy), ha="center", va=va, fontsize=11,
                         color="#777777")
 
-    step = max(1, len(x) // 6)
+    step = max(1, len(x) // 4)
     ticks = list(range(0, len(x), step))
     if ticks[-1] != x[-1]:
         if x[-1] - ticks[-1] < step * 0.7:
