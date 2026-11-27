@@ -59,6 +59,30 @@ def load_config():
 
 # ---------- 抓台銀資料 ----------
 
+SESSION = None
+
+
+def http_get(url):
+    """先開台銀首頁拿 cookie，再帶 Referer 抓資料（模擬一般瀏覽器）"""
+    global SESSION
+    if SESSION is None:
+        SESSION = requests.Session()
+        SESSION.headers.update(HEADERS)
+        try:
+            r0 = SESSION.get("https://rate.bot.com.tw/gold?Lang=zh-TW", timeout=30)
+            DEBUG.append(f"首頁 → HTTP {r0.status_code}, {len(r0.content)} bytes, "
+                         f"cookies={list(SESSION.cookies.keys())}")
+        except Exception as e:  # noqa: BLE001
+            DEBUG.append(f"首頁連線失敗：{e}")
+    return SESSION.get(url, timeout=30,
+                       headers={"Referer": "https://rate.bot.com.tw/gold?Lang=zh-TW"})
+
+
+def page_text(raw):
+    t = html.unescape(re.sub(r"<script.*?</script>|<style.*?</style>", " ", raw, flags=re.S))
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", t)).strip()
+
+
 def to_num(s):
     return int(float(s.replace(",", "")) + 0.5)
 
@@ -71,7 +95,7 @@ def qian(g):
 def fetch_month(year, month):
     """抓某個月每天的收盤牌價，回傳 [[YYYY-MM-DD, 買入, 賣出], ...]"""
     url = f"https://rate.bot.com.tw/gold/csv/{year:04d}-{month:02d}/TWD/0"
-    r = requests.get(url, headers=HEADERS, timeout=30)
+    r = http_get(url)
     r.raise_for_status()
     text = r.content.decode("utf-8-sig", errors="replace")
     rows = []
@@ -83,14 +107,14 @@ def fetch_month(year, month):
         rows.append([d, to_num(cols[3]), to_num(cols[4])])
     if not rows:
         DEBUG.append(f"{url} → HTTP {r.status_code}, {r.headers.get('content-type')}, "
-                     f"{len(r.content)} bytes, 開頭：{text[:150]!r}")
+                     f"{len(r.content)} bytes，內容：{page_text(text)[:300]!r}")
     return rows
 
 
 def fetch_intraday(day):
     """抓某一天盤中每次掛牌，回傳 [[HH:MM, 買入, 賣出], ...]（依時間排序）"""
     url = f"https://rate.bot.com.tw/gold/chart/{day}/TWD/"
-    r = requests.get(url, headers=HEADERS, timeout=30)
+    r = http_get(url)
     r.raise_for_status()
     text = html.unescape(re.sub(r"<[^>]+>", " ", r.text))
     text = re.sub(r"\s+", " ", text)
