@@ -1,0 +1,58 @@
+name: 金價通知
+
+on:
+  schedule:
+    # GitHub 用的是 UTC 時間，台灣時間 = UTC + 8。只在週一到週五執行。
+    - cron: "3 1 * * 1-5"    # 台灣 09:03
+    - cron: "33 2 * * 1-5"   # 台灣 10:33
+    - cron: "3 4 * * 1-5"    # 台灣 12:03
+    - cron: "33 5 * * 1-5"   # 台灣 13:33
+    - cron: "33 7 * * 1-5"   # 台灣 15:33
+  workflow_dispatch:          # 可以在 Actions 頁面手動按「Run workflow」
+    inputs:
+      test:
+        description: "測試模式（休假日也會傳，標題加【測試】）"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gold
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安裝套件
+        run: pip install -r bot/requirements.txt
+
+      - name: 抓台銀金價、更新資料和圖表
+        env:
+          TEST_MODE: ${{ inputs.test }}
+        run: python bot/main.py update
+
+      - name: 存檔（更新走勢圖網頁的資料）
+        run: |
+          git config user.name "gold-bot"
+          git config user.email "gold-bot@users.noreply.github.com"
+          git add docs
+          git commit -m "更新金價 $(TZ=Asia/Taipei date '+%Y-%m-%d %H:%M')" || echo "資料沒有變化"
+          git push
+
+      - name: 傳 LINE 訊息
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_TO: ${{ secrets.LINE_TO }}
+        run: |
+          SHA=$(git rev-parse HEAD)
+          python bot/main.py send "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${SHA}/docs/chart.png"
