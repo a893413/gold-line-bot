@@ -34,6 +34,8 @@ UP_COLOR = "#D32F2F"    # 台灣習慣：漲 = 紅
 DOWN_COLOR = "#2E7D32"  # 跌 = 綠
 GOLD = "#B8860B"
 
+DEBUG = []  # 抓不到資料時記錄台銀回了什麼，方便除錯
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/130.0 Safari/537.36",
@@ -71,7 +73,7 @@ def fetch_month(year, month):
     url = f"https://rate.bot.com.tw/gold/csv/{year:04d}-{month:02d}/TWD/0"
     r = requests.get(url, headers=HEADERS, timeout=30)
     r.raise_for_status()
-    text = r.content.decode("utf-8-sig")
+    text = r.content.decode("utf-8-sig", errors="replace")
     rows = []
     for line in text.splitlines()[1:]:
         cols = [c.strip() for c in line.split(",")]
@@ -79,6 +81,9 @@ def fetch_month(year, month):
             continue
         d = f"{cols[0][:4]}-{cols[0][4:6]}-{cols[0][6:]}"
         rows.append([d, to_num(cols[3]), to_num(cols[4])])
+    if not rows:
+        DEBUG.append(f"{url} → HTTP {r.status_code}, {r.headers.get('content-type')}, "
+                     f"{len(r.content)} bytes, 開頭：{text[:150]!r}")
     return rows
 
 
@@ -93,6 +98,9 @@ def fetch_intraday(day):
                r"([\d,]+(?:\.\d+)?)\s+([\d,]+(?:\.\d+)?)")
     rows = [[t, to_num(b), to_num(s)] for t, b, s in re.findall(pattern, text)]
     rows.sort(key=lambda x: x[0])
+    if not rows:
+        DEBUG.append(f"{url} → HTTP {r.status_code}, {len(r.content)} bytes, "
+                     f"開頭：{text[:150]!r}")
     return rows
 
 
@@ -299,7 +307,7 @@ def cmd_update(test=False):
 
     rows = sorted(daily.values(), key=lambda r: r[0])
     if not rows:
-        print("抓不到任何台銀資料：", *errors, sep="\n  ")
+        print("抓不到任何台銀資料：", *errors, *DEBUG[:4], sep="\n  ")
         sys.exit(1)  # 讓 GitHub 寄失敗通知 email 給你
 
     has_today = rows[-1][0] == today
