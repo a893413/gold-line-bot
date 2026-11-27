@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>黃金參考價</title>
+<meta name="theme-color" content="#B8860B">
+<style>
+  :root { --gold:#B8860B; --up:#D32F2F; --down:#2E7D32; --ink:#222; --sub:#666; --muted:#999; --bg:#faf8f3; --card:#fff; --line:#e8e4da; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font-family:-apple-system,"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif; -webkit-text-size-adjust:100%; }
+  main { max-width:720px; margin:0 auto; padding:16px; }
+  h1 { font-size:24px; margin:4px 0 2px; color:var(--gold); }
+  .sub { font-size:15px; color:var(--muted); margin-bottom:14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px 18px; margin-bottom:14px; }
+  .label { font-size:18px; color:var(--sub); }
+  .big { font-size:44px; font-weight:700; line-height:1.15; margin:2px 0; font-variant-numeric:tabular-nums; }
+  .chg { font-size:20px; font-weight:700; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:12px; }
+  .mini { font-size:15px; color:var(--muted); }
+  .mini b { display:block; font-size:22px; color:var(--ink); font-weight:600; font-variant-numeric:tabular-nums; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+  button { font:inherit; font-size:18px; padding:10px 14px; border-radius:12px; border:1.5px solid var(--line); background:var(--card); color:var(--ink); min-height:48px; }
+  button.on { border-color:var(--gold); background:#fbf3df; color:#7a5a08; font-weight:700; }
+  #ranges { flex-wrap:nowrap; gap:6px; }
+  #ranges button { flex:1; padding:10px 2px; font-size:17px; white-space:nowrap; }
+  .chart { position:relative; height:320px; }
+  .tip { font-size:16px; color:var(--sub); text-align:center; margin:6px 0 0; }
+  .note { font-size:14px; color:var(--muted); line-height:1.6; }
+  .err { color:var(--up); font-size:18px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>黃金參考價</h1>
+  <div class="sub" id="updated">讀取中…</div>
+
+  <div class="card" id="pick">
+    <div class="label" id="pickWhen">　</div>
+    <div class="label">拿去賣，<span class="unitTxt">每一錢</span>大約</div>
+    <div class="big" id="pickBuy">—</div>
+    <div class="chg" id="pickChg">　</div>
+    <div class="grid">
+      <div class="mini">買金價（<span class="unitTxt">每一錢</span>）<b id="pickSell">—</b></div>
+      <div class="mini" id="otherUnit">每一公克<b id="pickOther">—</b></div>
+    </div>
+  </div>
+
+  <div class="row" id="ranges">
+    <button data-r="today">今天</button>
+    <button data-r="7">1 週</button>
+    <button data-r="30" class="on">1 個月</button>
+    <button data-r="90">3 個月</button>
+    <button data-r="365">1 年</button>
+  </div>
+  <div class="card">
+    <div class="chart"><canvas id="c" role="img" aria-label="黃金參考價走勢圖"></canvas></div>
+    <p class="tip">用手指點圖上任何一天，上面會顯示那天的價格</p>
+  </div>
+
+  <div class="row">
+    <button id="uQ" class="on">看每一錢</button>
+    <button id="uG">看每一公克</button>
+  </div>
+
+  <p class="note">價格來源：臺灣銀行黃金存摺公開牌價（「拿去賣」＝銀行買入價，「買金價」＝銀行賣出價）。一錢 = 3.75 公克。<br>
+  拿金飾、金條去銀樓賣，每家店價格不同，實際金額以店家報價為準。</p>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+(function () {
+  var Q = 3.75, WK = "日一二三四五六";
+  var daily = [], today = { date: "", rows: [] };
+  var range = "30", unit = "q", chart = null, pts = [];
+
+  function v(g) { return unit === "q" ? Math.round(g * Q) : Math.round(g); }
+  function fmt(n) { return n.toLocaleString("zh-TW") + " 元"; }
+  function $(id) { return document.getElementById(id); }
+  function dayLabel(d) {
+    var dt = new Date(d + "T00:00:00+08:00");
+    return (dt.getMonth() + 1) + "/" + dt.getDate() + "（" + WK[dt.getDay()] + "）";
+  }
+
+  function buildPoints() {
+    if (range === "today") {
+      var d = today.date;
+      var rows = today.rows.length ? today.rows : [];
+      var prevClose = null;
+      for (var i = daily.length - 1; i >= 0; i--) if (daily[i][0] < d) { prevClose = daily[i]; break; }
+      return rows.map(function (r, i) {
+        return { label: r[0], when: dayLabel(d) + " " + r[0], buy: r[1], sell: r[2],
+                 prev: i > 0 ? rows[i - 1][1] : (prevClose ? prevClose[1] : null),
+                 prevTxt: i > 0 ? "比上一次掛牌" : "比前一天收盤" };
+      });
+    }
+    var n = parseInt(range, 10), sl = daily.slice(-n), off = daily.length - sl.length;
+    return sl.map(function (r, i) {
+      var p = daily[off + i - 1];
+      return { label: r[0].slice(5).replace("-", "/"), when: dayLabel(r[0]),
+               buy: r[1], sell: r[2], prev: p ? p[1] : null, prevTxt: "比前一天" };
+    });
+  }
+
+  function show(i) {
+    var p = pts[i]; if (!p) return;
+    $("pickWhen").textContent = p.when;
+    $("pickBuy").textContent = fmt(v(p.buy));
+    $("pickSell").textContent = fmt(v(p.sell));
+    $("pickOther").textContent = unit === "q" ? fmt(Math.round(p.buy)) : fmt(Math.round(p.buy * Q));
+    $("otherUnit").firstChild.textContent = unit === "q" ? "拿去賣每一公克" : "拿去賣每一錢";
+    var c = $("pickChg");
+    if (p.prev) {
+      var diff = v(p.buy) - v(p.prev), pct = (diff / v(p.prev) * 100).toFixed(1);
+      if (diff > 0) { c.textContent = "▲ " + p.prevTxt + "漲 " + diff.toLocaleString("zh-TW") + " 元（+" + pct + "%）"; c.style.color = "var(--up)"; }
+      else if (diff < 0) { c.textContent = "▼ " + p.prevTxt + "跌 " + (-diff).toLocaleString("zh-TW") + " 元（" + pct + "%）"; c.style.color = "var(--down)"; }
+      else { c.textContent = p.prevTxt + "一樣"; c.style.color = "var(--sub)"; }
+    } else { c.textContent = "　"; }
+    if (chart) {
+      chart.data.datasets[0].pointRadius = pts.map(function (_, k) { return k === i ? 8 : 0; });
+      chart.update("none");
+    }
+  }
+
+  function draw() {
+    pts = buildPoints();
+    document.querySelectorAll(".unitTxt").forEach(function (e) { e.textContent = unit === "q" ? "每一錢" : "每一公克"; });
+    if (!pts.length) {
+      if (chart) { chart.destroy(); chart = null; }
+      $("pickWhen").textContent = "今天台銀還沒有掛牌（或休假日）";
+      return;
+    }
+    var data = pts.map(function (p) { return v(p.buy); });
+    var cfg = {
+      type: "line",
+      data: { labels: pts.map(function (p) { return p.label; }),
+              datasets: [{ data: data, borderColor: "#B8860B", backgroundColor: "rgba(184,134,11,0.12)",
+                           fill: true, borderWidth: 3, tension: 0.25, pointRadius: 0,
+                           pointHoverRadius: 8, pointBackgroundColor: "#B8860B",
+                           pointBorderColor: "#fff", pointBorderWidth: 2 }] },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: { legend: { display: false }, tooltip: { enabled: false } },
+        onClick: function (e, a) { if (a.length) show(a[0].index); },
+        onHover: function (e, a) { if (a.length) show(a[0].index); },
+        scales: {
+          x: { grid: { display: false }, ticks: { color: "#888", font: { size: 14 }, maxTicksLimit: 6, maxRotation: 0 } },
+          y: { grid: { color: "#eee" }, ticks: { color: "#888", font: { size: 14 },
+               callback: function (x) { return x.toLocaleString("zh-TW"); } } }
+        }
+      }
+    };
+    if (chart) chart.destroy();
+    chart = new Chart($("c"), cfg);
+    show(pts.length - 1);
+  }
+
+  function bind() {
+    document.querySelectorAll("#ranges button").forEach(function (b) {
+      b.addEventListener("click", function () {
+        document.querySelectorAll("#ranges button").forEach(function (x) { x.classList.remove("on"); });
+        b.classList.add("on"); range = b.getAttribute("data-r"); draw();
+      });
+    });
+    $("uQ").addEventListener("click", function () { unit = "q"; $("uQ").classList.add("on"); $("uG").classList.remove("on"); draw(); });
+    $("uG").addEventListener("click", function () { unit = "g"; $("uG").classList.add("on"); $("uQ").classList.remove("on"); draw(); });
+  }
+
+  bind();
+  var bust = "?t=" + Date.now();
+  Promise.all([
+    fetch("data/daily.json" + bust).then(function (r) { return r.json(); }),
+    fetch("data/today.json" + bust).then(function (r) { return r.json(); }).catch(function () { return { date: "", rows: [] }; })
+  ]).then(function (res) {
+    daily = res[0].rows || []; today = res[1];
+    $("updated").textContent = "資料更新：" + (res[0].updated || "") + "（台灣時間）";
+    draw();
+  }).catch(function () {
+    $("updated").innerHTML = '<span class="err">資料讀取失敗，請稍後再打開一次</span>';
+  });
+})();
+</script>
+</body>
+</html>
