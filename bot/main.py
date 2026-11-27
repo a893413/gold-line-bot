@@ -1,21 +1,22 @@
 """
 金價 LINE 通知機器人
 
-資料來源：臺灣銀行「黃金存摺牌價」（公開資料）
-  - 每日收盤：https://rate.bot.com.tw/gold/csv/YYYY-MM/TWD/0
-  - 當天盤中：https://rate.bot.com.tw/gold/chart/YYYY-MM-DD/TWD/
+資料來源：XAUS 國際黃金現貨價（免費公開 API，https://xaus.com/api）
+  - 即時：/api/v1/spot?currency=TWD&unit=gram   國際金價 × 匯率，換算成台幣每公克
+  - 歷史：/api/v1/history?days=370              每日收盤（美元／盎司）
+  - 盤中：/api/v1/intraday?hours=24             每 5 分鐘一筆（美元／盎司）
+
+（原本用台銀牌價，但台銀網站有防機器人檢查，會擋雲端伺服器，所以改用這個。）
 
 用法（GitHub Actions 會自動執行，平常不用手動跑）：
   python bot/main.py update          抓價格、更新資料、畫圖、準備訊息
   python bot/main.py send IMAGE_URL  把準備好的訊息傳到 LINE
 """
 
-import html
 import json
 import os
-import re
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -27,20 +28,16 @@ CHART_PATH = ROOT / "docs" / "chart.png"
 OUT_DIR = ROOT / "out"
 CONFIG_PATH = ROOT / "config.json"
 
+API = "https://xaus.com/api/v1"
 TZ = ZoneInfo("Asia/Taipei")
-GRAMS_PER_QIAN = 3.75  # 一錢 = 3.75 公克
+GRAMS_PER_QIAN = 3.75          # 一錢 = 3.75 公克
+GRAMS_PER_OZ = 31.1034768      # 一金衡盎司 = 31.1034768 公克
 WEEKDAY = "一二三四五六日"
 UP_COLOR = "#D32F2F"    # 台灣習慣：漲 = 紅
 DOWN_COLOR = "#2E7D32"  # 跌 = 綠
 GOLD = "#B8860B"
 
-DEBUG = []  # 抓不到資料時記錄台銀回了什麼，方便除錯
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/130.0 Safari/537.36",
-    "Accept-Language": "zh-TW,zh;q=0.9",
-}
+HEADERS = {"User-Agent": "gold-line-bot (personal, family gold price notifier)"}
 
 
 # ---------- 設定 ----------
@@ -57,86 +54,63 @@ def load_config():
     return cfg
 
 
-# ---------- 抓台銀資料 ----------
-
-SESSION = None
-
-
-def http_get(url):
-    """先開台銀首頁拿 cookie，再帶 Referer 抓資料（模擬一般瀏覽器）"""
-    global SESSION
-    if SESSION is None:
-        SESSION = requests.Session()
-        SESSION.headers.update(HEADERS)
-        try:
-            r0 = SESSION.get("https://rate.bot.com.tw/gold?Lang=zh-TW", timeout=30)
-            DEBUG.append(f"首頁 → HTTP {r0.status_code}, {len(r0.content)} bytes, "
-                         f"cookies={list(SESSION.cookies.keys())}")
-        except Exception as e:  # noqa: BLE001
-            DEBUG.append(f"首頁連線失敗：{e}")
-    return SESSION.get(url, timeout=30,
-                       headers={"Referer": "https://rate.bot.com.tw/gold?Lang=zh-TW"})
-
-
-def page_text(raw):
-    t = html.unescape(re.sub(r"<script.*?</script>|<style.*?</style>", " ", raw, flags=re.S))
-    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", t)).strip()
-
-
-def to_num(s):
-    return int(float(s.replace(",", "")) + 0.5)
-
+# ---------- 換算 ----------
 
 def qian(g):
     """每公克 → 每錢（四捨五入，和網頁算法一致）"""
     return int(g * GRAMS_PER_QIAN + 0.5)
 
 
-def fetch_month(year, month):
-    """抓某個月每天的收盤牌價，回傳 [[YYYY-MM-DD, 買入, 賣出], ...]"""
-    url = f"https://rate.bot.com.tw/gold/csv/{year:04d}-{month:02d}/TWD/0"
-    r = http_get(url)
+def usd_oz_to_twd_g(usd_oz, fx):
+    return usd_oz * fx / GRAMS_PER_OZ
+
+
+# ---------- 抓資料 ----------
+
+def get_json(path, **params):
+    r = requests.get(f"{API}/{path}", params=params, headers=HEADERS, timeout=30)
     r.raise_for_status()
-    text = r.content.decode("utf-8-sig", errors="replace")
+    return r.json()
+
+
+def fetch_spot():
+    """回傳 dict：twd_g（台幣每公克）、usd_oz、fx（1 美元換多少台幣）、狀態"""
+    j = get_json("spot", currency="TWD", unit="gram", compact=1)
+    usd_oz = float(j["spot_usd_oz"])
+    fx = float(j["fx_rate"])
+    computed = usd_oz_to_twd_g(usd_oz, fx)
+    x = j.get("xau") or {}
+    twd_g = computed
+    if x.get("currency") == "TWD" and x.get("unit") in ("gram", "g"):
+        p = float(x["price"])
+        if abs(p - computed) / computed < 0.01:  # 兩種算法一致才用官方換算值
+            twd_g = p
+    state = j.get("data_state") or {}
+    return {"twd_g": twd_g, "usd_oz": usd_oz, "fx": fx,
+            "status": state.get("status", ""), "age": state.get("age_seconds"),
+            "updated_at": j.get("updated_at", "")}
+
+
+def fetch_history(fx):
+    """每日收盤，用目前匯率換成台幣每公克：[[YYYY-MM-DD, 台幣每公克], ...]"""
+    j = get_json("history", days=370)
     rows = []
-    for line in text.splitlines()[1:]:
-        cols = [c.strip() for c in line.split(",")]
-        if len(cols) < 5 or not re.fullmatch(r"\d{8}", cols[0]):
-            continue
-        d = f"{cols[0][:4]}-{cols[0][4:6]}-{cols[0][6:]}"
-        rows.append([d, to_num(cols[3]), to_num(cols[4])])
-    if not rows:
-        DEBUG.append(f"{url} → HTTP {r.status_code}, {r.headers.get('content-type')}, "
-                     f"{len(r.content)} bytes，內容：{page_text(text)[:300]!r}")
+    for p in j.get("points", []):
+        if p.get("d") and p.get("c"):
+            rows.append([p["d"], round(usd_oz_to_twd_g(float(p["c"]), fx), 2)])
     return rows
 
 
-def fetch_intraday(day):
-    """抓某一天盤中每次掛牌，回傳 [[HH:MM, 買入, 賣出], ...]（依時間排序）"""
-    url = f"https://rate.bot.com.tw/gold/chart/{day}/TWD/"
-    r = http_get(url)
-    r.raise_for_status()
-    text = html.unescape(re.sub(r"<[^>]+>", " ", r.text))
-    text = re.sub(r"\s+", " ", text)
-    pattern = (r"(\d{2}:\d{2})\s+新台幣\s*\(TWD\)\s+1\s*公克\s+"
-               r"([\d,]+(?:\.\d+)?)\s+([\d,]+(?:\.\d+)?)")
-    rows = [[t, to_num(b), to_num(s)] for t, b, s in re.findall(pattern, text)]
-    rows.sort(key=lambda x: x[0])
-    if not rows:
-        DEBUG.append(f"{url} → HTTP {r.status_code}, {len(r.content)} bytes, "
-                     f"開頭：{text[:150]!r}")
+def fetch_intraday(fx, today):
+    """今天（台灣時間）每 5 分鐘的價格：[[HH:MM, 台幣每公克], ...]"""
+    j = get_json("intraday", symbol="xau", hours=24)
+    rows = []
+    for p in j.get("points", []):
+        t = datetime.fromtimestamp(int(p["t"]), timezone.utc).astimezone(TZ)
+        if t.strftime("%Y-%m-%d") == today:
+            rows.append([t.strftime("%H:%M"), round(usd_oz_to_twd_g(float(p["p"]), fx), 2)])
+    rows.sort(key=lambda r: r[0])
     return rows
-
-
-def months_back(today, n):
-    y, m = today.year, today.month
-    out = []
-    for _ in range(n):
-        out.append((y, m))
-        m -= 1
-        if m == 0:
-            y, m = y - 1, 12
-    return out
 
 
 def load_json(path, default):
@@ -154,7 +128,7 @@ def save_json(path, obj):
 # ---------- 畫 LINE 訊息裡的圖 ----------
 
 def render_chart(rows, path):
-    """rows: [[YYYY-MM-DD, 買入每公克, 賣出], ...]，畫成「每錢回收參考價」走勢"""
+    """rows: [[YYYY-MM-DD, 台幣每公克], ...]，畫成每錢走勢"""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -167,8 +141,8 @@ def render_chart(rows, path):
     fig, ax = plt.subplots(figsize=(6.5, 4.225), dpi=160)  # 1040 x 676
     fig.patch.set_facecolor("white")
     ax.plot(x, vals, color=GOLD, linewidth=3, solid_capstyle="round")
-    ax.fill_between(x, vals, min(vals) - (max(vals) - min(vals) or 100) * 0.15,
-                    color=GOLD, alpha=0.10)
+    span = (max(vals) - min(vals)) or 100
+    ax.fill_between(x, vals, min(vals) - span * 0.15, color=GOLD, alpha=0.10)
     ax.scatter([x[-1]], [vals[-1]], s=90, color=GOLD, zorder=5,
                edgecolors="white", linewidths=2)
     ax.annotate(f"{vals[-1]:,}", (x[-1], vals[-1]), textcoords="offset points",
@@ -193,7 +167,7 @@ def render_chart(rows, path):
     ax.set_xticklabels([labels[i] for i in ticks], fontsize=11, color="#777777")
     ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{int(v):,}"))
     ax.tick_params(axis="y", labelsize=11, colors="#777777")
-    pad = (max(vals) - min(vals)) * 0.18 or 200
+    pad = span * 0.18 or 200
     ax.set_ylim(min(vals) - pad, max(vals) + pad)
     ax.grid(axis="y", color="#e5e5e5", linewidth=1)
     for s in ("top", "right", "left"):
@@ -211,47 +185,46 @@ def money(v):
     return f"{v:,} 元"
 
 
-def row_kv(label, value, value_color="#333333", bold=False):
+def row_kv(label, value, value_color="#333333"):
     return {
         "type": "box", "layout": "baseline", "spacing": "md",
         "contents": [
             {"type": "text", "text": label, "size": "md", "color": "#888888",
-             "flex": 4},
+             "flex": 5},
             {"type": "text", "text": value, "size": "lg", "color": value_color,
-             "align": "end", "flex": 6, "weight": "bold" if bold else "regular"},
+             "align": "end", "flex": 6},
         ],
     }
 
 
 def build_message(info, cfg, test=False):
-    q = qian
-    buy_q = q(info["buy"])
-    sell_q = q(info["sell"])
+    now_q = qian(info["twd_g"])
     when = info["when"]
     title = ("【測試】" if test else "") + "黃金參考價"
     subtitle = f"{when.month}/{when.day}（{WEEKDAY[when.weekday()]}）" \
-               f"{info['time']} 台銀公開牌價"
+               f"{when.strftime('%H:%M')} 國際金價即時換算"
 
     body = []
     target = int(cfg.get("target_per_qian") or 0)
-    if target and buy_q >= target:
+    if target and now_q >= target:
         body.append({
             "type": "box", "layout": "vertical", "backgroundColor": "#FDECEC",
-            "cornerRadius": "md", "paddingAll": "md", "margin": "none",
+            "cornerRadius": "md", "paddingAll": "md",
             "contents": [{"type": "text", "wrap": True, "weight": "bold",
                           "size": "lg", "color": UP_COLOR,
                           "text": f"已經到你設定的每錢 {target:,} 元了！"}],
         })
     body += [
-        {"type": "text", "text": "現在拿去賣，每一錢大約", "size": "lg",
+        {"type": "text", "text": "現在國際金價，每一錢", "size": "lg",
          "color": "#555555", "margin": "md"},
-        {"type": "text", "text": money(buy_q), "size": "4xl",
+        {"type": "text", "text": money(now_q), "size": "4xl",
          "weight": "bold", "color": "#222222"},
     ]
     alt_change = ""
-    if info.get("prev_buy"):
-        diff = buy_q - q(info["prev_buy"])
-        pct = diff / q(info["prev_buy"]) * 100
+    if info.get("prev_g"):
+        prev_q = qian(info["prev_g"])
+        diff = now_q - prev_q
+        pct = diff / prev_q * 100
         if diff > 0:
             txt, color = f"▲ 比前一天收盤漲 {diff:,} 元（+{pct:.1f}%）", UP_COLOR
         elif diff < 0:
@@ -260,16 +233,16 @@ def build_message(info, cfg, test=False):
             txt, color = "和前一天收盤一樣", "#555555"
         body.append({"type": "text", "text": txt, "size": "lg", "color": color,
                      "weight": "bold", "wrap": True})
-        alt_change = f"（{'漲' if diff > 0 else '跌' if diff < 0 else '平'}"\
-                     f"{abs(diff):,}）"
+        alt_change = f"（{'漲' if diff > 0 else '跌' if diff < 0 else '平'}{abs(diff):,}）"
+    rows = [row_kv("每一公克", f"{info['twd_g']:,.0f} 元")]
+    if info.get("day_high"):
+        rows += [row_kv("今天最高（每錢）", money(qian(info["day_high"]))),
+                 row_kv("今天最低（每錢）", money(qian(info["day_low"])))]
+    rows += [row_kv("國際金價", f"{info['usd_oz']:,.2f} 美元/盎司", "#888888"),
+             row_kv("匯率", f"1 美元 = {info['fx']:.3f} 元", "#888888")]
     body.append({"type": "separator", "margin": "lg"})
     body.append({"type": "box", "layout": "vertical", "margin": "lg",
-                 "spacing": "sm", "contents": [
-                     row_kv("每一公克", money(info["buy"])),
-                     row_kv("今天最高（每錢）", money(q(info["day_high"]))),
-                     row_kv("今天最低（每錢）", money(q(info["day_low"]))),
-                     row_kv("買金價（每錢）", money(sell_q), "#888888"),
-                 ]})
+                 "spacing": "sm", "contents": rows})
 
     bubble = {
         "type": "bubble", "size": "giga",
@@ -287,8 +260,9 @@ def build_message(info, cfg, test=False):
                    "contents": [
                        {"type": "text", "wrap": True, "size": "sm",
                         "color": "#999999",
-                        "text": "上面是近 30 天每錢回收參考價。這是台銀公開價格，"
-                                "拿金飾去賣的實際價格以店家報價為準。"},
+                        "text": "上圖是近 30 天每錢走勢。這是國際金價換算的中間價，"
+                                "拿去銀樓或銀行賣，收購價通常會再低一些，"
+                                "實際以店家報價為準。"},
                    ]},
     }
     if cfg.get("page_url"):
@@ -298,7 +272,7 @@ def build_message(info, cfg, test=False):
             "action": {"type": "uri", "label": "看詳細走勢",
                        "uri": cfg["page_url"]}})
 
-    alt = f"{title}：現在賣每錢約 {buy_q:,} 元{alt_change}"
+    alt = f"{title}：國際金價每錢約 {now_q:,} 元{alt_change}"
     return {"type": "flex", "altText": alt[:400], "contents": bubble}
 
 
@@ -309,67 +283,59 @@ def cmd_update(test=False):
     now = datetime.now(TZ)
     today = now.strftime("%Y-%m-%d")
 
+    try:
+        spot = fetch_spot()
+    except Exception as e:  # noqa: BLE001
+        print("抓不到國際金價：", e)
+        sys.exit(1)  # 讓 GitHub 寄失敗通知 email 給你
+    if spot["status"] == "unavailable":
+        print("資料來源暫時沒有價格（unavailable）")
+        sys.exit(1)
+
     daily_doc = load_json(DATA_DIR / "daily.json", {"rows": []})
     daily = {r[0]: r for r in daily_doc["rows"]}
-    n_months = 13 if len(daily) < 150 else 2  # 第一次執行先補一年歷史
-    errors = []
-    for y, m in months_back(now, n_months):
+    if len(daily) < 150:  # 第一次執行先補一年歷史（用目前匯率換算）
         try:
-            for r in fetch_month(y, m):
-                daily[r[0]] = r
+            for r in fetch_history(spot["fx"]):
+                daily.setdefault(r[0], r)
         except Exception as e:  # noqa: BLE001
-            errors.append(f"每日資料 {y}-{m:02d}：{e}")
+            print("歷史資料抓取失敗（不影響今天的通知）：", e)
+
+    # 前一天收盤：今天以前最後一筆
+    prev = next((r for r in sorted(daily.values(), key=lambda r: r[0], reverse=True)
+                 if r[0] < today), None)
 
     intraday = []
     try:
-        intraday = fetch_intraday(today)
+        intraday = fetch_intraday(spot["fx"], today)
     except Exception as e:  # noqa: BLE001
-        errors.append(f"盤中資料：{e}")
+        print("盤中資料抓取失敗（不影響今天的通知）：", e)
+    now_row = [now.strftime("%H:%M"), round(spot["twd_g"], 2)]
+    if not intraday or intraday[-1][0] < now_row[0]:
+        intraday.append(now_row)
 
-    if intraday:
-        daily[today] = [today, intraday[-1][1], intraday[-1][2]]
-
+    daily[today] = [today, round(spot["twd_g"], 2)]
     rows = sorted(daily.values(), key=lambda r: r[0])
-    if not rows:
-        print("抓不到任何台銀資料：", *errors, *DEBUG[:4], sep="\n  ")
-        sys.exit(1)  # 讓 GitHub 寄失敗通知 email 給你
-
-    has_today = rows[-1][0] == today
-    if not intraday and has_today:
-        intraday = [["收盤", rows[-1][1], rows[-1][2]]]
-
     save_json(DATA_DIR / "daily.json",
-              {"updated": now.strftime("%Y-%m-%d %H:%M"), "rows": rows})
-    save_json(DATA_DIR / "today.json",
-              {"date": today if has_today else rows[-1][0],
-               "rows": [r for r in intraday if r[0] != "收盤"]})
+              {"updated": now.strftime("%Y-%m-%d %H:%M"),
+               "source": "XAUS 國際金價 × 匯率換算", "rows": rows})
+    save_json(DATA_DIR / "today.json", {"date": today, "rows": intraday})
 
-    latest = rows[-1]
-    prev = next((r for r in reversed(rows) if r[0] < latest[0]), None)
-    day_pts = intraday or [["", latest[1], latest[2]]]
-    when = datetime.strptime(latest[0], "%Y-%m-%d")
     info = {
-        "when": when,
-        "time": (intraday[-1][0] if intraday and has_today
-                 and intraday[-1][0] != "收盤" else "收盤"),
-        "buy": latest[1], "sell": latest[2],
-        "prev_buy": prev[1] if prev else None,
-        "day_high": max(p[1] for p in day_pts),
-        "day_low": min(p[1] for p in day_pts),
+        "when": now, "twd_g": spot["twd_g"], "usd_oz": spot["usd_oz"],
+        "fx": spot["fx"], "prev_g": prev[1] if prev else None,
+        "day_high": max(p[1] for p in intraday),
+        "day_low": min(p[1] for p in intraday),
     }
-
     render_chart(rows[-int(cfg.get("chart_days", 30)):], CHART_PATH)
     msg = build_message(info, cfg, test=test)
 
-    send = has_today or test
-    reason = "" if send else "今天台銀沒有掛牌（休假日），不傳訊息"
-    if errors:
-        print("部分資料抓取失敗：", *errors, sep="\n  ")
     OUT_DIR.mkdir(exist_ok=True)
     save_json(OUT_DIR / "message.json", msg)
-    save_json(OUT_DIR / "status.json", {"send": send, "reason": reason})
-    print(f"最新：{latest[0]} {info['time']} 買入 {latest[1]}/g，"
-          f"每錢約 {qian(latest[1]):,}；send={send} {reason}")
+    save_json(OUT_DIR / "status.json", {"send": True, "reason": ""})
+    print(f"國際金價 {spot['usd_oz']:,.2f} USD/oz × 匯率 {spot['fx']:.4f} "
+          f"= {spot['twd_g']:,.1f} 元/公克，每錢 {qian(spot['twd_g']):,} 元；"
+          f"資料狀態 {spot['status']}（{spot['age']} 秒前）")
 
 
 def cmd_send(image_url):
