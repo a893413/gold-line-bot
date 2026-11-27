@@ -28,6 +28,8 @@
   .tip { font-size:16px; color:var(--sub); text-align:center; margin:6px 0 0; }
   .note { font-size:14px; color:var(--muted); line-height:1.6; }
   .err { color:var(--up); font-size:18px; }
+  .live { color:#2E7D32; }
+  .live::before { content:""; display:inline-block; width:9px; height:9px; border-radius:50%; background:#2E7D32; margin-right:6px; vertical-align:1px; }
   .card h2 { font-size:20px; margin:0 0 10px; color:var(--ink); }
   .bar { position:relative; height:14px; border-radius:7px; background:linear-gradient(90deg,#d9ead3,#f3ead2,#f6d5d5); margin:22px 0 8px; }
   .dot { position:absolute; top:50%; width:22px; height:22px; margin:-11px 0 0 -11px; border-radius:50%; background:var(--gold); border:3px solid #fff; box-shadow:0 0 0 1px var(--gold); }
@@ -108,6 +110,8 @@
   var Q = 3.75, WK = "日一二三四五六";
   var daily = [], today = { date: "", rows: [] };
   var range = "30", unit = "q", chart = null, pts = [];
+  var userPicked = false, liveOk = false, fx = null, lastIntra = 0;
+  var API = "https://xaus.com/api/v1", OZ = 31.1034768, REFRESH_MS = 60000;
 
   function v(g) { return unit === "q" ? Math.round(g * Q) : Math.round(g); }
   function fmt(n) { return n.toLocaleString("zh-TW") + " 元"; }
@@ -187,8 +191,8 @@
         responsive: true, maintainAspectRatio: false, animation: false,
         interaction: { mode: "index", intersect: false },
         plugins: { legend: { display: false }, tooltip: { enabled: false } },
-        onClick: function (e, a) { if (a.length) show(a[0].index); },
-        onHover: function (e, a) { if (a.length) show(a[0].index); },
+        onClick: function (e, a) { if (a.length) { userPicked = true; show(a[0].index); } },
+        onHover: function (e, a) { if (a.length) { userPicked = true; show(a[0].index); } },
         scales: {
           x: { grid: { display: false }, ticks: { color: "#888", font: { size: 13 }, maxTicksLimit: range === "today" ? 6 : 3, maxRotation: 0 } },
           y: { grid: { color: "#eee" }, ticks: { color: "#888", font: { size: 14 },
@@ -205,11 +209,11 @@
     document.querySelectorAll("#ranges button").forEach(function (b) {
       b.addEventListener("click", function () {
         document.querySelectorAll("#ranges button").forEach(function (x) { x.classList.remove("on"); });
-        b.classList.add("on"); range = b.getAttribute("data-r"); draw();
+        b.classList.add("on"); range = b.getAttribute("data-r"); userPicked = false; draw();
       });
     });
-    $("uQ").addEventListener("click", function () { unit = "q"; $("uQ").classList.add("on"); $("uG").classList.remove("on"); draw(); });
-    $("uG").addEventListener("click", function () { unit = "g"; $("uG").classList.add("on"); $("uQ").classList.remove("on"); draw(); });
+    $("uQ").addEventListener("click", function () { unit = "q"; $("uQ").classList.add("on"); $("uG").classList.remove("on"); userPicked = false; draw(); });
+    $("uG").addEventListener("click", function () { unit = "g"; $("uG").classList.add("on"); $("uQ").classList.remove("on"); userPicked = false; draw(); });
   }
 
   function latest() { return daily.length ? daily[daily.length - 1] : null; }
@@ -248,6 +252,67 @@
     hint.textContent = "用 " + fullDate(L[0]) + " 最新價格（每錢 " + fmt(Math.round(L[1] * Q)) + "）計算。這是國際金價換算，拿去賣的收購價通常會再低一些，金飾還會依成色扣折。";
   }
 
+  // ---------- 即時金價（每 60 秒更新，網頁在背景時暫停） ----------
+  function taipeiNow() {
+    var s = new Date().toLocaleString("sv-SE", { timeZone: "Asia/Taipei", hour12: false });
+    return { date: s.slice(0, 10), hm: s.slice(11, 16) };
+  }
+  function getJSON(u) {
+    return fetch(u, { cache: "no-store" }).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); });
+  }
+  function liveSpot() {
+    return getJSON(API + "/spot?currency=TWD&unit=gram&compact=1").then(function (j) {
+      var usd = +j.spot_usd_oz, f = +j.fx_rate, g = usd * f / OZ, x = j.xau || {};
+      if (x.currency === "TWD" && (x.unit === "gram" || x.unit === "g") && Math.abs(x.price - g) / g < 0.01) g = +x.price;
+      if (!(g > 0)) throw new Error("bad price");
+      fx = f;
+      return { g: Math.round(g * 100) / 100, status: (j.data_state || {}).status || "" };
+    });
+  }
+  function liveIntraday(date) {
+    return getJSON(API + "/intraday?symbol=xau&hours=24").then(function (j) {
+      var rows = [];
+      (j.points || []).forEach(function (p) {
+        var s = new Date(p.t * 1000).toLocaleString("sv-SE", { timeZone: "Asia/Taipei", hour12: false });
+        if (s.slice(0, 10) === date) rows.push([s.slice(11, 16), Math.round(p.p * fx / OZ * 100) / 100]);
+      });
+      return rows;
+    });
+  }
+  function refresh() {
+    if (!daily.length) return;
+    liveSpot().then(function (sp) {
+      var t = taipeiNow(), wd = new Date(t.date + "T00:00:00+08:00").getDay();
+      if (wd >= 1 && wd <= 5) {   // 平日才更新今天這一筆，週末不新增假的資料點
+        var last = daily[daily.length - 1];
+        if (last[0] === t.date) daily[daily.length - 1] = [t.date, sp.g];
+        else if (last[0] < t.date) daily.push([t.date, sp.g]);
+      }
+      var job = Promise.resolve();
+      if (Date.now() - lastIntra > 290000) {   // 盤中走勢每 5 分鐘才重抓一次
+        job = liveIntraday(t.date).then(function (rows) { lastIntra = Date.now(); today = { date: t.date, rows: rows }; })
+                                  .catch(function () {});
+      }
+      return job.then(function () {
+        if (today.date !== t.date) today = { date: t.date, rows: [] };
+        var rows = today.rows, lr = rows[rows.length - 1];
+        if (!lr || lr[0] < t.hm) rows.push([t.hm, sp.g]);
+        else if (lr[0] === t.hm) rows[rows.length - 1] = [t.hm, sp.g];
+        var note = sp.status && sp.status !== "fresh" ? "（資料暫時沒有更新，顯示最後價格）" : "（每分鐘自動更新）";
+        var el = $("updated");
+        el.className = "sub live";
+        el.textContent = "即時金價：每錢 " + fmt(Math.round(sp.g * Q)) + "，" + t.hm + " 更新" + note;
+        liveOk = true;
+        if (!userPicked) draw();
+        renderPosition(); renderWorth();
+      });
+    }).catch(function () {
+      if (!liveOk) $("updated").textContent += "（目前抓不到即時金價，顯示的是最近一次排程的資料）";
+    });
+  }
+  setInterval(function () { if (!document.hidden) refresh(); }, REFRESH_MS);
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) refresh(); });
+
   bind();
   try {
     var sa = localStorage.getItem("goldAmt"), su = localStorage.getItem("goldUnit");
@@ -264,6 +329,7 @@
     daily = res[0].rows || []; today = res[1];
     $("updated").textContent = "資料更新：" + (res[0].updated || "") + "（台灣時間）";
     draw(); renderPosition(); renderWorth();
+    refresh();
   }).catch(function () {
     $("updated").innerHTML = '<span class="err">資料讀取失敗，請稍後再打開一次</span>';
   });
