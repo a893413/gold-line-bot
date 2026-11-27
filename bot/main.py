@@ -92,8 +92,8 @@ def fetch_spot():
 
 
 def fetch_history(fx):
-    """每日收盤，用目前匯率換成台幣每公克：[[YYYY-MM-DD, 台幣每公克], ...]"""
-    j = get_json("history", days=370)
+    """每日收盤（最多 5 年），用目前匯率換成台幣每公克：[[YYYY-MM-DD, 台幣每公克], ...]"""
+    j = get_json("history", days=1825)
     rows = []
     for p in j.get("points", []):
         if p.get("d") and p.get("c"):
@@ -295,7 +295,9 @@ def cmd_update(test=False):
 
     daily_doc = load_json(DATA_DIR / "daily.json", {"rows": []})
     daily = {r[0]: r for r in daily_doc["rows"]}
-    if len(daily) < 150:  # 第一次執行先補一年歷史（用目前匯率換算）
+    oldest = min(daily) if daily else today
+    two_years_ago = f"{now.year - 2}-{now.strftime('%m-%d')}"
+    if oldest > two_years_ago:  # 歷史不到 2 年就補抓（最多 5 年，用目前匯率換算）
         try:
             for r in fetch_history(spot["fx"]):
                 daily.setdefault(r[0], r)
